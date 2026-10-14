@@ -1,0 +1,63 @@
+# Taruh file ini di repo GitHub kamu sebagai:  .github/workflows/dobby.yml
+# Lalu tab Actions -> "Get libdobby" -> Run workflow.
+# Hasil: artifact "libdobby" berisi armeabi-v7a/libdobby.so dan arm64-v8a/libdobby.so
+name: Get libdobby
+on:
+  workflow_dispatch:
+
+jobs:
+  dobby:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Cara 1: ambil file jadi dari rilis resmi Dobby (tidak perlu compile)
+      - name: Ambil libdobby.so dari rilis resmi
+        run: |
+          mkdir -p rel out/armeabi-v7a out/arm64-v8a
+          cd rel
+          gh release download latest -R jmpews/Dobby || echo "download rilis gagal"
+          ls -la
+          for z in *.zip; do [ -f "$z" ] && unzip -o -q "$z" -d "x_$z" || true; done
+          for t in *.tar.gz *.tgz; do [ -f "$t" ] && mkdir -p "x_$t" && tar xzf "$t" -C "x_$t" || true; done
+          echo "== libdobby.so yang ditemukan =="
+          find . -name 'libdobby.so' | while read -r f; do
+            info=$(file "$f")
+            echo "$f -> $info"
+            case "$info" in
+              *"ARM aarch64"*) cp "$f" ../out/arm64-v8a/libdobby.so ;;
+              *"32-bit"*"ARM"*) cp "$f" ../out/armeabi-v7a/libdobby.so ;;
+            esac
+          done
+          true
+
+      # Cara 2 (cadangan): build dari source, hanya untuk ABI yang belum ada
+      - name: Cadangan - build dari source
+        run: |
+          if [ -f out/armeabi-v7a/libdobby.so ] && [ -f out/arm64-v8a/libdobby.so ]; then
+            echo "Keduanya sudah ada, lewati build."; exit 0
+          fi
+          git clone --depth 1 https://github.com/jmpews/Dobby.git
+          for ABI in armeabi-v7a arm64-v8a; do
+            [ -f out/$ABI/libdobby.so ] && continue
+            echo "== build $ABI =="
+            cmake -S Dobby -B build-$ABI \
+              -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_NDK=$ANDROID_NDK_HOME \
+              -DCMAKE_ANDROID_ARCH_ABI=$ABI -DCMAKE_SYSTEM_VERSION=21 \
+              -DCMAKE_BUILD_TYPE=Release || true
+            cmake --build build-$ABI --target dobby -j4 || true
+            f=$(find build-$ABI -name 'libdobby.so' | head -n1)
+            if [ -n "$f" ]; then cp "$f" out/$ABI/libdobby.so; fi
+          done
+          true
+
+      - name: Hasil akhir
+        run: |
+          find out -type f -exec ls -l {} \;
+          test -f out/armeabi-v7a/libdobby.so || (echo "libdobby.so armeabi-v7a TIDAK berhasil didapat" && exit 1)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libdobby
+          path: out/
+          if-no-files-found: error
